@@ -1,4 +1,5 @@
 # vm-vxlan
+
 Eric Lund's guide to VMs and vxlan
 
 Start with GCP cluster of 4 instances running Ubuntu (referred to as
@@ -12,8 +13,7 @@ Internal IP Addresses for the GCP Cluster:
   - bl-003: 10.255.0.3
   - bl-004: 10.255.0.4
   
-Log into each blade and set up a VxLAN tunnel endpoint on each blade
-(showing one blade here):
+On each blade set up a VxLAN tunnel endpoint (showing one blade here):
     - Create the tunnel endpoint device itself (ens4 is the IP interface
       on which the 10.255.0.0/16 network is configured on each blade):
       bl-001$ ip link add vxlan10 type vxlan id 10 dstport 0 dev ens4
@@ -28,14 +28,20 @@ Log into each blade and set up a VxLAN tunnel endpoint on each blade
     - Bring up the bridge and tunnel:
       bl-001$ ip link set up vxlan10
       bl-001$ ip link set up br-vxlan10
-Log into the blade where Kea will be running and set the blade up as
-both the Kea server and as a NAT router for the 10.254.0.0/16 network:
+On each blade prepare 'apt' for installing packages:
+  br-001$ apt update
+  br-001$ apt upgrade -y
+On the blade where Kea will be running set the blade up as both the Kea
+server and as a NAT router for the 10.254.0.0/16 network:
     - Add an IP address to the bridge device:
       bl-001$ ip addr add 10.254.0.1/16 dev br-vxlan10
+    - pre-configure the kea installation to avoid an interactive
+      question:
+      bl-001$ debconf-set-selections << EOF
+      kea-ctrl-agent kea-ctrl-agent/make_a_choice select configured_random_password
+      EOF
     - Install Kea on the blade:
-      bl-001$ apt update
-      bl-001$ apt upgrade -y
-      bl-001$ apt install kea
+      bl-001$ apt install -y kea iptables
     - Move the old Kea DHCP4 config out of the way and replace it with
       the config to set up DHCP4 on out new VxLAN network:
       bl-001$ mv /etc/kea/kea-dhcp4.conf /etc/kea/kea-dhcp4.conf.orig
@@ -88,20 +94,17 @@ both the Kea server and as a NAT router for the 10.254.0.0/16 network:
     - Configure the blade as a NAT router for traffic on the
       10.254.0.0/16 network:
       bl-001$: iptables -t nat -A POSTROUTING -s 10.254.0.0/16 -j MASQUERADE
-On each blade prepare 'apt' for installing packages:
-  br-002$ apt update
-  br-002$ apt upgrade -y
 On each blade, install libvirt and related tools and get libvirt set up
 for networking using our VxLAN network:
     - Install libvirt and related packages
-      bl-001$: apt install iputils-ping dns-utils libvirt-daemon-system \
+      bl-001$: apt install -y iputils-ping libvirt-daemon-system \
                virtinst qemu-kvm libvirt-clients libguestfs-tools \
                bridge-utils
     - Enable and start libvirtd
       bl-001$: systemctl enable --now libvirtd
     - Delete the default network from libvirt (this will eliminate DHCP
       conflicts between libvirt and Kea):
-      bl-001$ virsh net-destroy default
+      bl-001$ virsh net-destroy default   # ignore errors saying it isn't active if any
       bl-001$ virsh net-undefine default
     - Define a new network in libvirt that bridges onto the VxLAN
       network:
@@ -185,10 +188,17 @@ On each blade create a VM named 'vm1' that is connected to your VxLAN network an
          --import \
          --noautoconsole \
          -n vm1
+    NOTE: the '--network' option can be given as often as needed to
+          specify more than one network interface. If you want to
+          predefine the MAC address on a given network interface you can
+          specify something along the lines of
+              --network network:net-vxlan10,mac=52:54:00:a9:78:10
+          the first three octets in the MAC address must be '52:54:00'
+          (these are reserved for qemu / kvm VMs). The rest can be
+          whatever you choose.
 From each blade log in through the console of the VM and see how it is set up:
     - Log in as root through the console using the password you set up:
       bl-001$ virsh console vm1
       ...
       ubuntu$ ip a
       ...
-
